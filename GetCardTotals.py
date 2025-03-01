@@ -94,7 +94,6 @@ def read_checkpoint():
             for line in f:
                 filename, line_number = line.strip().split(",")
                 checkpoints[filename] = int(line_number)
-            logging.debug(f"Checkpoints read: {checkpoints}")
             return checkpoints
     return {}
 
@@ -107,7 +106,7 @@ async def update_checkpoint(filename, line_number):
         with open(checkpoint_file, "w") as f:
             for file, line_num in checkpoints.items():
                 f.write(f"{file},{line_num}\n")
-    logging.debug(f"Checkpoint updated: {filename} -> {line_number}")
+    # logging.debug(f"Checkpoint updated: {filename} -> {line_number}")
 
 
 # Asynchronous function to process database operations
@@ -123,52 +122,62 @@ async def process_db_operations(
     zipcode,
     dba,
 ):
-    # Execute stored procedure with OUTPUT parameter
-    result = cursor.execute(
-        """
-        DECLARE @Result INT;
-        EXEC usp_IsNewAccount ?, @Result OUTPUT;
-        SELECT @Result;
-    """,
-        acct_num,
-    ).fetchone()
+    try:
+        # Log the parameters being passed to the stored procedure
+        logging.debug(
+            f"Parameters: ProcessDate={process_date_int}, AccountNumber={acct_num}, ReferenceId={ref_num}, CardNumber={card_num}, Name={name}, Address={address}, City={city}, ZIPCODE={zipcode}, DBA={dba}"
+        )
 
-    if result and result[0] == 1:
-        new_acct = "T"
-    else:
-        new_acct = "F"
+        # Execute stored procedure with OUTPUT parameter
+        result = cursor.execute(
+            """
+            DECLARE @Result INT;
+            EXEC usp_IsNewAccount ?, @Result OUTPUT;
+            SELECT @Result;
+        """,
+            acct_num,
+        ).fetchone()
 
-    change_database(cursor, "kRAP")
+        if result and result[0] == 1:
+            new_acct = "T"
+        else:
+            new_acct = "F"
 
-    # Call the stored procedure to insert the values into the CardTotals table
-    cursor.execute(
-        """
-        EXEC debit.usp_UpsertCardTotals 
-        @ProcessDate = ?, 
-        @AccountNumber = ?, 
-        @ReferenceId = ?, 
-        @NewAcct = ?, 
-        @CardNumber = ?, 
-        @Name = ?, 
-        @Address = ?, 
-        @City = ?, 
-        @ZIPCODE = ?, 
-        @DBA = ?
-    """,
-        process_date_int,
-        acct_num,
-        ref_num,
-        new_acct,
-        card_num,
-        name,
-        address,
-        city,
-        zipcode,
-        dba,
-    )
+        change_database(cursor, "kRAP")
+
+        # Call the stored procedure to insert the values into the CardTotals table
+        cursor.execute(
+            """
+            EXEC debit.usp_UpsertCardTotals 
+            @ProcessDate = ?, 
+            @AccountNumber = ?, 
+            @ReferenceId = ?, 
+            @NewAcct = ?, 
+            @CardNumber = ?, 
+            @Name = ?, 
+            @Address = ?, 
+            @City = ?, 
+            @ZIPCODE = ?, 
+            @DBA = ?
+        """,
+            process_date_int,
+            acct_num,
+            ref_num,
+            new_acct,
+            card_num,
+            name,
+            address,
+            city,
+            zipcode,
+            dba,
+        )
+    except Exception as e:
+        logging.error(f"Error processing database operations: {e}")
+        print(f"Error processing database operations: {e}")
 
 
 async def process_file_list(filename):
+    line_number = 0
     file_path = os.path.join(directory, filename)
     if os.path.isfile(file_path):  # Adjust the file format as needed
         try:
@@ -179,11 +188,21 @@ async def process_file_list(filename):
             # Log the file being processed
             logging.info(f"Processing file: {filename}")
 
+            # # Determine the starting line number
+            # start_line = checkpoints.get(filename, 1)
+
+            # # Read the rest of the file and count matches
+            # for current_line_number, line in enumerate(file, start=2):
+            #     if current_line_number < start_line:
+            #         continue
+
             # Read the file and process the first line for the process date
             with open(file_path, mode="r") as file:
+                line_number = 0
                 # Skip the first 14 lines
                 for _ in range(16):
                     file.readline()
+                    line_number += 1
 
                 # Read the 16th line for the process date
                 process_date_line = file.readline().rstrip("\n\r")
@@ -204,16 +223,28 @@ async def process_file_list(filename):
 
                 # Regular expression to match lines that begin with a 6-digit number followed by 4 spaces and a two-digit number
                 pattern1 = re.compile(r"^\d{6}\s{4}\d{2}")
-                pattern2 = re.compile(
-                    r"^\s*(\bPO BOX\b|\d{1,5}\s[A-Z][A-Z\s]+)\s*.*\s*$"
-                )
+                # pattern2 = re.compile(
+                #     r"^\s*(\bPO BOX\b|\d{1,5}\s[A-Z][A-Z\s]+)\s*.*\s*$"
+                # )
                 pattern3 = re.compile(r"^\s*.*?\b[A-Z]{2}\d{5}(-\d{4})?\b.*\s*$")
 
                 # Regular expression to extract values based on whitespace
                 value_pattern = re.compile(r"(\S+(?:\s\S+)*)(?=\s{2,}|\s*$)")
 
-                # Read the rest of the file and process matching lines
-                line_number = 17  # Start after the initial 16 lines
+                # # Determine the starting line number
+                # start_line = checkpoints.get(filename, 1)
+                # line_number = 0
+                # # Read the rest of the file and count matches
+                # while line_number < start_line:
+                #         file.readline()
+
+                # Skip completed lines
+                for _ in range(checkpoints.get(filename, 1)):
+                    file.readline()
+                    line_number += 1
+
+                # # Read the rest of the file and process matching lines
+                # line_number = 17  # Start after the initial 16 lines
                 while True:
                     line1 = file.readline().rstrip("\n\r")
                     line_number += 1
@@ -223,16 +254,30 @@ async def process_file_list(filename):
                     if pattern1.match(line1):
                         line2 = file.readline().rstrip("\n\r")
                         line_number += 1
-                        while not pattern2.match(line2):
+
+                        while (
+                            line2.startswith("KEESLER FEDERAL CREDIT UNION")
+                            or line2.strip() == ""
+                            or line2.startswith("123456")
+                            or line2.startswith("-------------")
+                        ):
                             line2 = file.readline().rstrip("\n\r")
                             line_number += 1
+                            # while not pattern2.match(line2):
+                            # line2 = file.readline().rstrip("\n\r")
+                            # line_number += 1
 
                         if line2.endswith("  "):
                             line2 = line2[:-2]
 
                         line3 = file.readline().rstrip("\n\r")
                         line_number += 1
-                        while not pattern3.match(line3):
+                        while (
+                            line3.startswith("KEESLER FEDERAL CREDIT UNION")
+                            or line3.strip() == ""
+                            or line3.startswith("123456")
+                            or line3.startswith("-------------")
+                        ):
                             line3 = file.readline().rstrip("\n\r")
                             line_number += 1
 
@@ -248,7 +293,8 @@ async def process_file_list(filename):
                                 )
                             # Rename the extracted values to match the variables
                             if len(values[10]) > 4:
-                                ref_num = values[10]
+                                ref_num = values[values.__len__() - 1]
+                                # ref_num = values[10]
                             else:
                                 ref_num = values[11]
                             acct_num = values[4].split(" ")[1]
@@ -326,6 +372,7 @@ async def process_file(filename):
             with open(file_path, mode="r") as file:
                 first_row = file.readline().strip()
                 process_date_str = first_row[32:39]
+                print(f"Extracted process date string: '{process_date_str}'")
                 process_date = datetime.strptime(process_date_str, "%m%d%y").strftime(
                     "%Y%m%d"
                 )
