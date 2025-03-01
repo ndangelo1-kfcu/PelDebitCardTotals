@@ -5,6 +5,7 @@ import os
 import logging
 import shutil
 import re
+import asyncio
 
 # Ensure the logs directory exists
 log_directory = os.path.join(os.path.dirname(__file__), "logs")
@@ -98,20 +99,76 @@ def read_checkpoint():
     return {}
 
 
-# Function to update the checkpoint file
-def update_checkpoint(filename, line_number):
+# Asynchronous function to update the checkpoint file
+async def update_checkpoint(filename, line_number):
     checkpoints = read_checkpoint()
     checkpoints[filename] = line_number
-    with open(checkpoint_file, "w") as f:
-        for file, line_num in checkpoints.items():
-            f.write(f"{file},{line_num}\n")
+    async with asyncio.Lock():
+        with open(checkpoint_file, "w") as f:
+            for file, line_num in checkpoints.items():
+                f.write(f"{file},{line_num}\n")
     logging.debug(f"Checkpoint updated: {filename} -> {line_number}")
 
 
-import re
+# Asynchronous function to process database operations
+async def process_db_operations(
+    cursor,
+    process_date_int,
+    acct_num,
+    ref_num,
+    card_num,
+    name,
+    address,
+    city,
+    zipcode,
+    dba,
+):
+    # Execute stored procedure with OUTPUT parameter
+    result = cursor.execute(
+        """
+        DECLARE @Result INT;
+        EXEC usp_IsNewAccount ?, @Result OUTPUT;
+        SELECT @Result;
+    """,
+        acct_num,
+    ).fetchone()
+
+    if result and result[0] == 1:
+        new_acct = "T"
+    else:
+        new_acct = "F"
+
+    change_database(cursor, "kRAP")
+
+    # Call the stored procedure to insert the values into the CardTotals table
+    cursor.execute(
+        """
+        EXEC debit.usp_UpsertCardTotals 
+        @ProcessDate = ?, 
+        @AccountNumber = ?, 
+        @ReferenceId = ?, 
+        @NewAcct = ?, 
+        @CardNumber = ?, 
+        @Name = ?, 
+        @Address = ?, 
+        @City = ?, 
+        @ZIPCODE = ?, 
+        @DBA = ?
+    """,
+        process_date_int,
+        acct_num,
+        ref_num,
+        new_acct,
+        card_num,
+        name,
+        address,
+        city,
+        zipcode,
+        dba,
+    )
 
 
-def process_file_list(filename):
+async def process_file_list(filename):
     file_path = os.path.join(directory, filename)
     if os.path.isfile(file_path):  # Adjust the file format as needed
         try:
@@ -216,42 +273,12 @@ def process_file_list(filename):
                         # Change the database to ARCUSYM000 to check if the account is new
                         change_database(cursor, "ARCUSYM000")
 
-                        # Execute stored procedure with OUTPUT parameter
-                        result = cursor.execute(
-                            """
-                            DECLARE @Result INT;
-                            EXEC usp_IsNewAccount ?, @Result OUTPUT;
-                            SELECT @Result;
-                        """,
-                            acct_num,
-                        ).fetchone()
-
-                        if result and result[0] == 1:
-                            new_acct = "T"
-                        else:
-                            new_acct = "F"
-
-                        change_database(cursor, "kRAP")
-
-                        # Call the stored procedure to insert the values into the CardTotals table
-                        cursor.execute(
-                            """
-                            EXEC debit.usp_UpsertCardTotals 
-                            @ProcessDate = ?, 
-                            @AccountNumber = ?, 
-                            @ReferenceId = ?, 
-                            @NewAcct = ?, 
-                            @CardNumber = ?, 
-                            @Name = ?, 
-                            @Address = ?, 
-                            @City = ?, 
-                            @ZIPCODE = ?, 
-                            @DBA = ?
-                        """,
+                        # Process database operations
+                        await process_db_operations(
+                            cursor,
                             process_date_int,
                             acct_num,
                             ref_num,
-                            new_acct,
                             card_num,
                             name,
                             address,
@@ -266,6 +293,9 @@ def process_file_list(filename):
                         ref_num = None
                         card_num = None
 
+                        # Update the checkpoint file after processing each line
+                        await update_checkpoint(filename, line_number)
+
             cursor.close()
             conn.close()
             logging.info(f"Processed file: {filename}")
@@ -275,13 +305,13 @@ def process_file_list(filename):
             logging.info(f"Moved file to archive: {filename}")
 
             # Remove the checkpoint entry for the processed file
-            update_checkpoint(filename, 0)
+            await update_checkpoint(filename, 0)
         except Exception as e:
             logging.error(f"Error processing file {filename} at {line_number}: {e}")
             print(f"Error processing file {filename}: {e}")
 
 
-def process_file(filename):
+async def process_file(filename):
     file_path = os.path.join(directory, filename)
     if os.path.isfile(file_path):  # Adjust the file format as needed
         try:
@@ -323,42 +353,12 @@ def process_file(filename):
                     # Change the database to ARCUSYM000 to check if the account is new
                     change_database(cursor, "ARCUSYM000")
 
-                    # Execute stored procedure with OUTPUT parameter
-                    result = cursor.execute(
-                        """
-                        DECLARE @Result INT;
-                        EXEC usp_IsNewAccount ?, @Result OUTPUT;
-                        SELECT @Result;
-                    """,
-                        acct_num,
-                    ).fetchone()
-
-                    if result and result[0] == 1:
-                        new_acct = "T"
-                    else:
-                        new_acct = "F"
-
-                    change_database(cursor, "kRAP")
-
-                    # Call the stored procedure to insert the values into the CardTotals table
-                    cursor.execute(
-                        """
-                        EXEC debit.usp_UpsertCardTotals 
-                        @ProcessDate = ?, 
-                        @AccountNumber = ?, 
-                        @ReferenceId = ?, 
-                        @NewAcct = ?, 
-                        @CardNumber = ?, 
-                        @Name = ?, 
-                        @Address = ?, 
-                        @City = ?, 
-                        @ZIPCODE = ?, 
-                        @DBA = ?
-                    """,
+                    # Process database operations
+                    await process_db_operations(
+                        cursor,
                         process_date_int,
                         acct_num,
                         ref_num,
-                        new_acct,
                         card_num,
                         name,
                         address,
@@ -371,7 +371,7 @@ def process_file(filename):
                     conn.commit()
 
                     # Update the checkpoint file after processing each line
-                    update_checkpoint(filename, current_line_number)
+                    await update_checkpoint(filename, current_line_number)
 
             cursor.close()
             conn.close()
@@ -382,7 +382,7 @@ def process_file(filename):
             logging.info(f"Moved file to archive: {filename}")
 
             # Remove the checkpoint entry for the processed file
-            update_checkpoint(filename, 0)
+            await update_checkpoint(filename, 0)
         except Exception as e:
             logging.error(
                 f"Error processing file {filename} at line {current_line_number}: {e}"
@@ -412,9 +412,9 @@ for filename in files_to_process:
         continue
 
     if "list" in filename.lower():
-        process_file_list(filename)
+        asyncio.run(process_file_list(filename))
     else:
-        process_file(filename)
+        asyncio.run(process_file(filename))
 
 # Remove log files older than 90 days
 log_file = os.path.join(log_directory, "process_log.log")
