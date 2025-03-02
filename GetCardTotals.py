@@ -17,7 +17,7 @@ logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all log messages
 
 # Create file handler
 file_handler = logging.FileHandler(os.path.join(log_directory, "process_log.log"))
-file_handler.setLevel(logging.DEBUG)
+file_handler.setLevel(logging.ERROR)
 
 # Create console handler
 console_handler = logging.StreamHandler()
@@ -109,6 +109,32 @@ async def update_checkpoint(filename, line_number):
     # logging.debug(f"Checkpoint updated: {filename} -> {line_number}")
 
 
+def get_month_end(int_date):
+    # Convert the integer date to a string in the format YYYY-MM-DD
+    date_str = str(int_date)
+    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+
+    # Convert the date string to a datetime object
+    input_date = datetime.strptime(date_str, "%Y-%m-%d")
+
+    # Calculate the first day of the next month from the input date
+    if input_date.month == 12:
+        first_day_of_next_month = input_date.replace(
+            year=input_date.year + 1, month=1, day=1
+        )
+    else:
+        first_day_of_next_month = input_date.replace(month=input_date.month + 1, day=1)
+
+    # Calculate the last day of the current month from the input date
+    last_day_of_current_month = first_day_of_next_month - timedelta(days=1)
+
+    return last_day_of_current_month
+
+
+def convert_date_to_int(date):
+    return int(date.strftime("%Y%m%d"))
+
+
 # Asynchronous function to process database operations
 async def process_db_operations(
     cursor,
@@ -123,9 +149,23 @@ async def process_db_operations(
     dba,
 ):
     try:
+        # Because we don't keep all processdates, we need to determine the best processdate to use
+        # The default is the process date passed in
+        best_processdate = process_date_int
+
+        # Get the last day of the month for the process date
+        month_end = get_month_end(process_date_int)
+
+        # Calculate the date 90 days ago from today
+        date_90_days_ago = datetime.today() - timedelta(days=90)
+
+        # Check if the monthend is greater than 90 days ago
+        if month_end < date_90_days_ago:
+            best_processdate = convert_date_to_int(month_end)
+
         # Log the parameters being passed to the stored procedure
         logging.debug(
-            f"Parameters: ProcessDate={process_date_int}, AccountNumber={acct_num}, ReferenceId={ref_num}, CardNumber={card_num}, Name={name}, Address={address}, City={city}, ZIPCODE={zipcode}, DBA={dba}"
+            f"Parameters: ProcessDate={best_processdate}, AccountNumber={acct_num}, ReferenceId={ref_num}, CardNumber={card_num}, Name={name}, Address={address}, City={city}, ZIPCODE={zipcode}, DBA={dba}"
         )
 
         # Execute stored procedure with OUTPUT parameter
@@ -187,14 +227,6 @@ async def process_file_list(filename):
 
             # Log the file being processed
             logging.info(f"Processing file: {filename}")
-
-            # # Determine the starting line number
-            # start_line = checkpoints.get(filename, 1)
-
-            # # Read the rest of the file and count matches
-            # for current_line_number, line in enumerate(file, start=2):
-            #     if current_line_number < start_line:
-            #         continue
 
             # Read the file and process the first line for the process date
             with open(file_path, mode="r") as file:
