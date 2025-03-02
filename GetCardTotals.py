@@ -33,7 +33,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # Define the directory and search directory for the file
-directory = r"C:\kdev\PY_Nate\PELDEBITCARDTOTALS\EFT_SOURCE_FILES"
+directory = r"C:\kdev\PY_Nate\PELDEBITCARDTOTALS\EFT_SOURCE_FILES\ListFiles"
 archive_directory = r"C:\kdev\PY_Nate\PELDEBITCARDTOTALS\Archive"
 checkpoint_file = "checkpoint.txt"
 
@@ -236,14 +236,27 @@ async def process_file_list(filename):
             # Read the file and process the first line for the process date
             with open(file_path, mode="r") as file:
                 line_number = 0
-                # Skip the first 14 lines
-                for _ in range(16):
-                    file.readline()
+                # # Skip the first 14 lines
+                # for _ in range(16):
+                #     file.readline()
+                #     line_number += 1
+
+                while True:
+                    line = file.readline().rstrip("\n\r")
                     line_number += 1
 
-                # Read the 16th line for the process date
-                process_date_line = file.readline().rstrip("\n\r")
-                process_date_str = process_date_line[32:39].strip()
+                    if line.startswith("Record Count:"):
+                        break  # End of file or end of records
+
+                    while not line.startswith("HRKEESLER"):
+                        line = file.readline().rstrip("\n\r")
+                        line_number += 1
+
+                    # Read the 16th line for the process date
+                    # process_date_line = file.readline().rstrip("\n\r")
+                    process_date_str = line[32:39].strip()
+                    break
+
                 print(
                     f"Extracted process date string: '{process_date_str}'"
                 )  # Debugging step
@@ -277,7 +290,6 @@ async def process_file_list(filename):
 
                 # Skip completed lines
                 start_line = max(1, checkpoints.get(filename, 1) - 5)
-                logging.info(f"Starting from line: {start_line}")
 
                 # Skip lines up to the start_line
                 for _ in range(start_line):
@@ -502,9 +514,24 @@ for filename in files_to_process:
         continue
 
     if "list" in filename.lower():
-        asyncio.run(process_file_list(filename))
+        try:
+            asyncio.run(process_file_list(filename))
+        except Exception as e:
+            logging.error(
+                f"Error processing file {filename} using process_file_list(): {e})"
+            )
+            logging.error(f"attempting to process {filename} with process_file()")
+            asyncio.run(process_file(filename))
     else:
-        asyncio.run(process_file(filename))
+        try:
+            asyncio.run(process_file(filename))
+        except Exception as e:
+            logging.error(
+                f"Error processing file {filename} using process_file(): {e})"
+            )
+            logging.error(f"attempting to process {filename} with process_file_list()")
+            asyncio.run(process_file_list(filename))
+
 
 # Remove log files older than 90 days
 log_file = os.path.join(log_directory, "process_log.log")
