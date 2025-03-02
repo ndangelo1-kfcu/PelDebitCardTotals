@@ -149,34 +149,39 @@ async def process_db_operations(
     dba,
 ):
     try:
-        # Because we don't keep all processdates, we need to determine the best processdate to use
-        # The default is the process date passed in
-        best_processdate = process_date_int
+        # # Because we don't keep all processdates, we need to determine the best processdate to use
+        # # The default is the process date passed in
+        # best_processdate = process_date_int
 
-        # Get the last day of the month for the process date
-        month_end = get_month_end(process_date_int)
+        # # Get the last day of the month for the process date
+        # month_end = get_month_end(process_date_int)
 
-        # Calculate the date 90 days ago from today
-        date_90_days_ago = datetime.today() - timedelta(days=90)
+        # # Calculate the date 90 days ago from today
+        # date_90_days_ago = datetime.today() - timedelta(days=90)
 
-        # Check if the monthend is greater than 90 days ago
-        if month_end < date_90_days_ago:
-            best_processdate = convert_date_to_int(month_end)
+        # # Check if the monthend is greater than 90 days ago
+        # if month_end < date_90_days_ago:
+        #     best_processdate = convert_date_to_int(month_end)
 
         # Log the parameters being passed to the stored procedure
         logging.debug(
-            f"Parameters: ProcessDate={best_processdate}, AccountNumber={acct_num}, ReferenceId={ref_num}, CardNumber={card_num}, Name={name}, Address={address}, City={city}, ZIPCODE={zipcode}, DBA={dba}"
+            f"Parameters: ProcessDate={process_date_int}, AccountNumber={acct_num}, ReferenceId={ref_num}, CardNumber={card_num}, Name={name}, Address={address}, City={city}, ZIPCODE={zipcode}, DBA={dba}"
         )
 
         # Execute stored procedure with OUTPUT parameter
-        result = cursor.execute(
+        cursor.execute(
             """
-            DECLARE @Result INT;
-            EXEC usp_IsNewAccount ?, @Result OUTPUT;
+            DECLARE @Result BIT;
+            EXEC usp_IsNewAccount ?, ?, @Result OUTPUT;
             SELECT @Result;
         """,
             acct_num,
-        ).fetchone()
+            process_date_int,
+        )
+
+        # Fetch the result
+        cursor.nextset()  # Move to the next result set
+        result = cursor.fetchone()
 
         if result and result[0] == 1:
             new_acct = "T"
@@ -271,9 +276,15 @@ async def process_file_list(filename):
                 #         file.readline()
 
                 # Skip completed lines
-                for _ in range(checkpoints.get(filename, 1)):
+                start_line = max(1, checkpoints.get(filename, 1) - 5)
+                logging.info(f"Starting from line: {start_line}")
+
+                # Skip lines up to the start_line
+                for _ in range(start_line):
                     file.readline()
                     line_number += 1
+                    if line_number == start_line:
+                        break
 
                 # # Read the rest of the file and process matching lines
                 # line_number = 17  # Start after the initial 16 lines
